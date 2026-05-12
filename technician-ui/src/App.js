@@ -49,7 +49,7 @@ function App() {
     localStorage.setItem('technicianName', activity.technicianName);
 
     try {
-        const response = await fetch('http://localhost:5000/api/activities', {
+        const response = await fetch('gestione-tecnici-ute-production.up.railway.app', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(activity),
@@ -146,7 +146,7 @@ console.log("Attività totali scaricate dal server:", allActivities);
       </div>
 
       <div style={{ marginTop: '20px' }}>
-        <button onClick={() => window.open('http://localhost:5000/api/export', '_blank')} style={{padding: '10px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+        <button onClick={() => window.open('gestione-tecnici-ute-production.up.railway.app', '_blank')} style={{padding: '10px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
           Download CSV Export
         </button>
       </div>
