@@ -1,0 +1,12 @@
+[
+  {
+    "id": "task_2",
+    "reference": "MANUT-A2",
+    "description": "Sostituzione sensori linea 3"
+  },
+  {
+    "id": "task_3",
+    "reference": "SVIL-WEB",
+    "description": "Configurazione Dashboard Cloud"
+  }
+]

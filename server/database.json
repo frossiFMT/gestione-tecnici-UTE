@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1778575333010,
+    "technicianName": "Rossi Francesco",
+    "date": "2026-05-12",
+    "type": "DEVELOPMENT",
+    "hours": 8,
+    "description": "",
+    "reference": "",
+    "createdAt": "2026-05-12T08:42:13.010Z"
+  },
+  {
+    "id": 1778575382201,
+    "technicianName": "Giovanni Santi",
+    "date": "2026-05-14",
+    "type": "TRIP",
+    "hours": 8,
+    "description": "",
+    "reference": "",
+    "createdAt": "2026-05-12T08:43:02.201Z"
+  },
+  {
+    "id": 1778588000503,
+    "technicianName": "Rossi Francesco",
+    "date": "2026-05-15",
+    "type": "LEAVE",
+    "hours": 8,
+    "description": "",
+    "reference": "",
+    "createdAt": "2026-05-12T12:13:20.503Z"
+  },
+  {
+    "id": 1778589991503,
+    "technicianName": "Rossi Francesco",
+    "date": "2026-05-13",
+    "type": "DEVELOPMENT",
+    "hours": 8,
+    "reference": "PRJ-2026-001",
+    "description": "Installazione Server PLC",
+    "createdAt": "2026-05-12T12:46:31.503Z"
+  }
+]
