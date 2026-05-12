@@ -22,7 +22,7 @@ function App() {
   // 3. Load activities from server to show in calendar
   const fetchActivities = async () => {
     try {
-      const response = await fetch('http://gestione-tecnici-ute-production.up.railway.app');
+      const response = await fetch('gestione-tecnici-ute-production.up.railway.app');
       const data = await response.json();
       setAllActivities(data);
     } catch (err) {
