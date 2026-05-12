@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs'); // File System module for permanent storage
 const app = express();
-const PORT = 5000;
+
 const DB_FILE = './database.json';
 const TODO_FILE = './to_do.json';
 const API_URL = "gestione-tecnici-ute-production.up.railway.app";
