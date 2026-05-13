@@ -270,7 +270,121 @@ app.get('/admin', (req, res) => {
         </html>
     `);
 });
+// --- PORTALE TECNICO (Frontend integrato) ---
+app.get('/client', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Technician Portal</title>
+            <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
+            <style>
+                body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+                .container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+                .form-card { background: #2c3e50; padding: 20px; border-radius: 10px; width: 320px; color: white; }
+                .calendar-card { flex: 1; min-width: 400px; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                input, select, textarea, button { width: 100%; padding: 10px; margin: 8px 0; border-radius: 5px; border: none; box-sizing: border-box; }
+                button { background: #3498db; color: white; font-weight: bold; cursor: pointer; }
+                button:hover { background: #2980b9; }
+                .recent-activities { margin-top: 20px; background: white; padding: 15px; border-radius: 10px; color: #333; }
+                .activity-item { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; justify-content: space-between; }
+            </style>
+        </head>
+        <body>
+            <h1>Technician Portal</h1>
+            <div class="container">
+                <div class="form-card">
+                    <h3>Log Activity</h3>
+                    <form id="activityForm">
+                        <label>Technician Name:</label>
+                        <input type="text" id="techName" required>
+                        <label>Date:</label>
+                        <input type="date" id="date" required>
+                        <label>Type:</label>
+                        <select id="type">
+                            <option value="DEVELOPMENT">Software Development</option>
+                            <option value="LEAVE">Leave / Ferie</option>
+                            <option value="TRIP">Business Trip / Trasferta</option>
+                        </select>
+                        <label>Hours:</label>
+                        <input type="number" id="hours" value="8">
+                        <label id="refLabel">Project Code:</label>
+                        <input type="text" id="reference">
+                        <label>Description:</label>
+                        <textarea id="description"></textarea>
+                        <button type="submit">Save & Sync</button>
+                    </form>
+                </div>
 
+                <div class="calendar-card">
+                    <h3>Your Calendar</h3>
+                    <div id="calendar"></div>
+                </div>
+            </div>
+
+            <script>
+                let calendar;
+                const techInput = document.getElementById('techName');
+                
+                // Load saved name
+                techInput.value = localStorage.getItem('technicianName') || '';
+
+                document.addEventListener('DOMContentLoaded', function() {
+                    var calendarEl = document.getElementById('calendar');
+                    calendar = new FullCalendar.Calendar(calendarEl, {
+                        initialView: 'dayGridMonth',
+                        events: '/api/activities', // Carica i dati direttamente dall'API del server
+                        eventDataTransform: function(eventData) {
+                            // Filtra gli eventi per mostrare solo quelli del tecnico inserito
+                            if (eventData.technicianName.toLowerCase() !== techInput.value.toLowerCase()) return false;
+                            return {
+                                title: eventData.hours + 'h - ' + eventData.reference,
+                                start: eventData.date,
+                                backgroundColor: eventData.type === 'DEVELOPMENT' ? '#3788d8' : eventData.type === 'LEAVE' ? '#28a745' : '#f39c12'
+                            };
+                        }
+                    });
+                    calendar.render();
+                });
+
+                // Update calendar when name changes
+                techInput.addEventListener('input', () => {
+                    localStorage.setItem('technicianName', techInput.value);
+                    calendar.refetchEvents();
+                });
+
+                // Handle Form Submit
+                document.getElementById('activityForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const data = {
+                        technicianName: techInput.value,
+                        date: document.getElementById('date').value,
+                        type: document.getElementById('type').value,
+                        hours: document.getElementById('hours').value,
+                        reference: document.getElementById('reference').value,
+                        description: document.getElementById('description').value
+                    };
+
+                    const response = await fetch('/api/activities', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+
+                    if (response.ok) {
+                        alert("Activity Saved!");
+                        calendar.refetchEvents();
+                    } else {
+                        const err = await response.json();
+                        alert("Error: " + err.error);
+                    }
+                });
+            </script>
+        </body>
+        </html>
+    `);
+});
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, '0.0.0.0', () => {
