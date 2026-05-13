@@ -1,392 +1,232 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs'); // File System module for permanent storage
+const { Pool } = require('pg');
+
 const app = express();
 
-const DB_FILE = './database.json';
-const TODO_FILE = './to_do.json';
-const API_URL = "gestione-tecnici-ute-production.up.railway.app";
+// --- DATABASE CONFIGURATION ---
+// Railway provides DATABASE_URL automatically in the environment
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
+
+// Initialize Database Tables
+const initDb = async () => {
+    try {
+        // Table for technician activities
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS activities (
+                id BIGINT PRIMARY KEY,
+                technician_name TEXT,
+                date DATE,
+                type TEXT,
+                hours INTEGER,
+                reference TEXT,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+        console.log("PostgreSQL Tables Ready");
+    } catch (err) {
+        console.error("Database Init Error:", err);
+    }
+};
+initDb();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // <-- AGGIUNGI QUESTA RIGA
-
-const loadToDo = () => {
-    try {
-        if (!fs.existsSync(TODO_FILE)) {
-            fs.writeFileSync(TODO_FILE, JSON.stringify([]));
-            return [];
-        }
-        const data = fs.readFileSync(TODO_FILE, 'utf8');
-        // Se il file è vuoto (0 byte), ritorna array vuoto invece di crashare
-        if (!data.trim()) return []; 
-        return JSON.parse(data);
-    } catch (error) {
-        console.error("Errore nel formato di to_do.json:", error);
-        return []; // Ritorna vuoto invece di rompere il server
-    }
-};
-// Helper function to load activities from the JSON file
-const loadActivities = () => {
-    try {
-        if (!fs.existsSync(DB_FILE)) return [];
-        const data = fs.readFileSync(DB_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error("Error reading database file:", error);
-        return [];
-    }
-};
-
-// Helper function to save activities to the JSON file
-const saveActivities = (data) => {
-    try {
-        fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-    } catch (error) {
-        console.error("Error saving to database file:", error);
-    }
-};
-
-// Initial load of activities
-let activities = loadActivities();
+app.use(express.urlencoded({ extended: true }));
 
 // --- API ROUTES ---
-// Questa è la rotta che il client React cerca per vedere le attività
-app.get('/api/activities', (req, res) => {
-    // Carichiamo i dati aggiornati dal file database.json
-    const activities = loadActivities(); 
-    res.json(activities);
-});
-// Route to receive new activities from technicians
-app.post('/api/activities', (req, res) => {
-    // Controllo di sicurezza: se il body è vuoto, non fare nulla
-    if (!req.body || !req.body.technicianName) {
-        return res.status(400).json({ error: "Missing technician name" });
+
+// GET: Fetch all activities from DB
+app.get('/api/activities', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM activities ORDER BY date DESC');
+        // Map database snake_case to frontend camelCase
+        const activities = result.rows.map(row => ({
+            id: row.id,
+            technicianName: row.technician_name,
+            date: row.date.toISOString().split('T')[0],
+            type: row.type,
+            hours: row.hours,
+            reference: row.reference,
+            description: row.description,
+            createdAt: row.created_at
+        }));
+        res.json(activities);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
+});
 
-    const { technicianName, date, hours } = req.body;
-    const newHours = Number(hours);
+// POST: Save new activity to DB
+app.post('/api/activities', async (req, res) => {
+    const { technicianName, date, hours, type, reference, description } = req.body;
+    const id = Date.now();
 
-    // Controllo conflitti (massimo 8 ore al giorno)
-    const currentTotalHours = activities
-        .filter(a => a.technicianName === technicianName && a.date === date)
-        .reduce((sum, a) => sum + Number(a.hours), 0);
+    try {
+        await pool.query(
+            'INSERT INTO activities (id, technician_name, date, type, hours, reference, description) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [id, technicianName, date, type, hours, reference, description]
+        );
 
-    const { todo_task } = req.body;
-
-    if (todo_task) {
-        let currentTodo = loadToDo();
-        // Rimuoviamo il task assegnato dalla lista dei "da fare"
-        currentTodo = currentTodo.filter(t => t.id !== todo_task);
-        fs.writeFileSync(TODO_FILE, JSON.stringify(currentTodo, null, 2));
-    }    
-    if (currentTotalHours + newHours > 8) {
-        // Se la richiesta viene dal form Admin (HTML), mandiamo un avviso semplice
         if (req.headers['content-type'] === 'application/x-www-form-urlencoded') {
-            return res.send(`
-                <script>
-                    alert("CONFLITTO: ${technicianName} ha già ${currentTotalHours}h il ${date}.");
-                    window.location.href = '/admin';
-                </script>
-            `);
+            return res.redirect('/admin');
         }
-        // Se viene dal client React, mandiamo il JSON
-        return res.status(400).json({ 
-            error: `Conflict: ${technicianName} has ${currentTotalHours}h planned.` 
-        });
+        res.status(201).json({ id, message: "Activity saved to PostgreSQL" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    const newEntry = {
-        id: Date.now(),
-        technicianName,
-        date,
-        type: req.body.type || 'DEVELOPMENT',
-        hours: newHours,
-        reference: req.body.reference || '',
-        description: req.body.description || '',
-        createdAt: new Date().toISOString()
-    };
-    
-    activities.push(newEntry);
-    saveActivities(activities);
-    
-    // Se la richiesta viene dall'Admin form, ricarica la pagina admin
-    if (req.headers['content-type'] === 'application/x-www-form-urlencoded') {
-        return res.redirect('/admin');
-    }
-    
-    res.status(201).json(newEntry);
 });
 
-// Route for CSV Export
-app.get('/api/export', (req, res) => {
-    if (activities.length === 0) return res.status(404).send("No data to export");
-    
-    const headers = "Technician,Date,Type,Hours,Reference,Description\n";
-    const rows = activities.map(a => 
-        `"${a.technicianName}",${a.date},${a.type},${a.hours},"${a.reference}","${a.description}"`
-    ).join("\n");
-    
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=export.csv');
-    res.send(headers + rows);
-});
+// --- INTERFACES ---
 
-app.get('/admin', (req, res) => {
-    const { technician, startDate, endDate } = req.query;
-    const todoList = loadToDo(); // Carica le attività da assegnare
+// 1. ADMIN DASHBOARD (Gantt + Global Calendar)
+app.get('/admin', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM activities');
+        const activities = result.rows;
 
-    // 1. Estrai la lista UNICA dei tecnici per i suggerimenti nel filtro
-    const technicianList = [...new Set(activities.map(a => a.technicianName))];
+        const technicianList = [...new Set(activities.map(a => a.technician_name))];
+        const calendarEvents = activities.map(a => ({
+            title: `${a.technician_name}: ${a.hours}h`,
+            start: a.date.toISOString().split('T')[0],
+            backgroundColor: a.type === 'DEVELOPMENT' ? '#3788d8' : a.type === 'LEAVE' ? '#28a745' : '#f39c12'
+        }));
 
-    // 2. Logica di filtraggio
-    let filtered = activities;
-    if (technician) {
-        filtered = filtered.filter(a => a.technicianName === technician);
-    }
-    if (startDate) filtered = filtered.filter(a => a.date >= startDate);
-    if (endDate) filtered = filtered.filter(a => a.date <= endDate);
-
-    // 3. Dati per Gantt e Calendario
-    const ganttData = filtered.map(a => [
-        a.id.toString(), a.technicianName, a.type,
-        new Date(a.date), new Date(a.date), null, 100, null
-    ]);
-
-    const calendarEvents = filtered.map(a => ({
-        title: `${a.technicianName}: ${a.hours}h`,
-        start: a.date,
-        backgroundColor: a.type === 'DEVELOPMENT' ? '#3788d8' : a.type === 'LEAVE' ? '#28a745' : '#f39c12'
-    }));
-
-    res.send(`
-        <html>
+        res.send(`
+            <html>
             <head>
-                <title>Admin Control Panel</title>
-                <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+                <title>Admin Dashboard</title>
+                <script src="https://www.gstatic.com/charts/loader.js"></script>
                 <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
                 <style>
-                    body { font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; background: #f0f2f5; }
-                    .sidebar { width: 320px; background: #2c3e50; color: white; padding: 20px; height: 100vh; position: fixed; box-sizing: border-box; }
-                    .main-content { margin-left: 320px; padding: 20px; width: calc(100% - 320px); }
-                    .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 25px; color: #333; }
-                    select, input, button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 6px; border: 1px solid #ddd; display: block; box-sizing: border-box; }
-                    button { background: #3498db; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
-                    button:hover { background: #2980b9; }
-                    h2 { font-size: 1.2rem; border-bottom: 1px solid #555; padding-bottom: 10px; margin-top: 20px; }
-                    #calendar { height: 600px; }
+                    body { font-family: sans-serif; display: flex; background: #f4f7f6; margin: 0; }
+                    .sidebar { width: 300px; background: #2c3e50; color: white; padding: 20px; height: 100vh; }
+                    .main { flex: 1; padding: 20px; }
+                    .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                    input, select, button { width: 100%; padding: 10px; margin: 10px 0; }
+                    button { background: #3498db; color: white; border: none; cursor: pointer; }
                 </style>
             </head>
             <body>
                 <div class="sidebar">
-                    <h1>Admin Dashboard</h1>
-                    
-                    <h2>🔍 Filters</h2>
-                    <form method="GET" action="/admin">
-                        <label>Select Technician:</label>
-                        <select name="technician">
-                            <option value="">-- All Technicians --</option>
-                            ${technicianList.map(t => `<option value="${t}" ${technician === t ? 'selected' : ''}>${t}</option>`).join('')}
-                        </select>
-                        <input type="date" name="startDate" value="${startDate || ''}">
-                        <input type="date" name="endDate" value="${endDate || ''}">
-                        <button type="submit">Apply Filters</button>
-                        <button type="button" onclick="window.location.href='/admin'" style="background:#7f8c8d">Reset View</button>
-                    </form>
-
-                    <!-- Nella sidebar, sotto Quick Assign, sostituisci il form con questo -->
-                    <h2>➕ Assign Planned Task</h2>
+                    <h2>Admin Panel</h2>
                     <form action="/api/activities" method="POST">
                         <input type="text" name="technicianName" placeholder="Technician Name" required>
                         <input type="date" name="date" required>
-                        
-                        <label>Select Task from Backlog:</label>
-                        <select name="todo_task" onchange="fillTaskDetails(this)">
-                            <option value="">-- Select a Task --</option>
-                            ${todoList.map(t => `<option value="${t.id}" data-ref="${t.reference}" data-desc="${t.description}">${t.reference} - ${t.description}</option>`).join('')}
-                        </select>
-
-                        <!-- Campi nascosti o pre-compilati -->
-                        <input type="hidden" id="hidden_ref" name="reference">
-                        <input type="hidden" id="hidden_desc" name="description">
-                        
                         <select name="type">
                             <option value="DEVELOPMENT">Development</option>
                             <option value="TRIP">Trip</option>
                         </select>
                         <input type="number" name="hours" value="8">
-                        <button type="submit" style="background:#2ecc71">Assign to Tech</button>
+                        <button type="submit">Quick Assign</button>
                     </form>
                 </div>
-
-                <div class="main-content">
-                    <div class="card">
-                        <h3>📊 Gantt Timeline</h3>
-                        <div id="chart_div" style="min-height: 250px;"></div>
-                    </div>
-
-                    <div class="card">
-                        <h3>📅 Monthly Calendar</h3>
-                        <div id="calendar"></div>
-                    </div>
+                <div class="main">
+                    <div class="card"><h3>📅 Global Calendar</h3><div id="calendar"></div></div>
                 </div>
-
                 <script>
-                    // GOOGLE GANTT
-                    google.charts.load('current', {'packages':['gantt']});
-                    google.charts.setOnLoadCallback(() => {
-                        var data = new google.visualization.DataTable();
-                        data.addColumn('string', 'ID'); data.addColumn('string', 'Name');
-                        data.addColumn('string', 'Resource'); data.addColumn('date', 'Start');
-                        data.addColumn('date', 'End'); data.addColumn('number', 'Duration');
-                        data.addColumn('number', 'Percent'); data.addColumn('string', 'Dep');
-                        
-                        const raw = ${JSON.stringify(ganttData)};
-                        const rows = raw.map(r => { 
-                            r[3] = new Date(r[3]); r[4] = new Date(r[4]); 
-                            r[4].setHours(23,59,59); return r; 
-                        });
-                        data.addRows(rows);
-                        new google.visualization.Gantt(document.getElementById('chart_div')).draw(data, { height: 250 });
-                    });
-
-                    // FULLCALENDAR
                     document.addEventListener('DOMContentLoaded', function() {
                         var calendarEl = document.getElementById('calendar');
                         var calendar = new FullCalendar.Calendar(calendarEl, {
                             initialView: 'dayGridMonth',
-                            events: ${JSON.stringify(calendarEvents)},
-                            headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek' }
+                            events: ${JSON.stringify(calendarEvents)}
                         });
                         calendar.render();
                     });
-                    function fillTaskDetails(select) {
-                        const selectedOption = select.options[select.selectedIndex];
-                        document.getElementById('hidden_ref').value = selectedOption.getAttribute('data-ref') || '';
-                        document.getElementById('hidden_desc').value = selectedOption.getAttribute('data-desc') || '';
-                        }
                 </script>
             </body>
-        </html>
-    `);
+            </html>
+        `);
+    } catch (err) { res.status(500).send(err.message); }
 });
-// --- PORTALE TECNICO (Frontend integrato) ---
+
+// 2. TECHNICIAN PORTAL (Client)
 app.get('/client', (req, res) => {
     res.send(`
-        <!DOCTYPE html>
-        <html lang="en">
+        <html>
         <head>
-            <meta charset="UTF-8">
             <title>Technician Portal</title>
             <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
             <style>
-                body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
-                .container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
-                .form-card { background: #2c3e50; padding: 20px; border-radius: 10px; width: 320px; color: white; }
-                .calendar-card { flex: 1; min-width: 400px; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                input, select, textarea, button { width: 100%; padding: 10px; margin: 8px 0; border-radius: 5px; border: none; box-sizing: border-box; }
-                button { background: #3498db; color: white; font-weight: bold; cursor: pointer; }
-                button:hover { background: #2980b9; }
-                .recent-activities { margin-top: 20px; background: white; padding: 15px; border-radius: 10px; color: #333; }
-                .activity-item { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; justify-content: space-between; }
+                body { font-family: sans-serif; padding: 20px; background: #eceff1; }
+                .container { display: flex; gap: 20px; }
+                .form-box { width: 350px; background: #37474f; color: white; padding: 20px; border-radius: 10px; }
+                .calendar-box { flex: 1; background: white; padding: 20px; border-radius: 10px; }
+                input, select, textarea, button { width: 100%; padding: 10px; margin: 8px 0; border-radius: 4px; border: none; }
+                button { background: #00bcd4; color: white; font-weight: bold; cursor: pointer; }
             </style>
         </head>
         <body>
             <h1>Technician Portal</h1>
             <div class="container">
-                <div class="form-card">
-                    <h3>Log Activity</h3>
-                    <form id="activityForm">
-                        <label>Technician Name:</label>
-                        <input type="text" id="techName" required>
-                        <label>Date:</label>
-                        <input type="date" id="date" required>
-                        <label>Type:</label>
-                        <select id="type">
-                            <option value="DEVELOPMENT">Software Development</option>
-                            <option value="LEAVE">Leave / Ferie</option>
-                            <option value="TRIP">Business Trip / Trasferta</option>
-                        </select>
-                        <label>Hours:</label>
-                        <input type="number" id="hours" value="8">
-                        <label id="refLabel">Project Code:</label>
-                        <input type="text" id="reference">
-                        <label>Description:</label>
-                        <textarea id="description"></textarea>
-                        <button type="submit">Save & Sync</button>
-                    </form>
+                <div class="form-box">
+                    <h3>Log Your Activity</h3>
+                    <input type="text" id="techName" placeholder="Your Name">
+                    <input type="date" id="date">
+                    <select id="type">
+                        <option value="DEVELOPMENT">Development</option>
+                        <option value="TRIP">Trip</option>
+                        <option value="LEAVE">Leave</option>
+                    </select>
+                    <input type="number" id="hours" value="8">
+                    <input type="text" id="ref" placeholder="Project / Destination">
+                    <textarea id="desc" placeholder="Notes"></textarea>
+                    <button onclick="saveData()">Save Activity</button>
                 </div>
-
-                <div class="calendar-card">
-                    <h3>Your Calendar</h3>
+                <div class="calendar-box">
                     <div id="calendar"></div>
                 </div>
             </div>
-
             <script>
                 let calendar;
                 const techInput = document.getElementById('techName');
-                
-                // Load saved name
                 techInput.value = localStorage.getItem('technicianName') || '';
 
                 document.addEventListener('DOMContentLoaded', function() {
-                    var calendarEl = document.getElementById('calendar');
-                    calendar = new FullCalendar.Calendar(calendarEl, {
+                    calendar = new FullCalendar.Calendar(document.getElementById('calendar'), {
                         initialView: 'dayGridMonth',
-                        events: '/api/activities', // Carica i dati direttamente dall'API del server
-                        eventDataTransform: function(eventData) {
-                            // Filtra gli eventi per mostrare solo quelli del tecnico inserito
-                            if (eventData.technicianName.toLowerCase() !== techInput.value.toLowerCase()) return false;
-                            return {
-                                title: eventData.hours + 'h - ' + eventData.reference,
-                                start: eventData.date,
-                                backgroundColor: eventData.type === 'DEVELOPMENT' ? '#3788d8' : eventData.type === 'LEAVE' ? '#28a745' : '#f39c12'
-                            };
+                        events: '/api/activities',
+                        eventDataTransform: function(ev) {
+                            if (ev.technicianName.toLowerCase() !== techInput.value.toLowerCase()) return false;
+                            return { title: ev.hours + 'h - ' + ev.type, start: ev.date };
                         }
                     });
                     calendar.render();
                 });
 
-                // Update calendar when name changes
-                techInput.addEventListener('input', () => {
-                    localStorage.setItem('technicianName', techInput.value);
-                    calendar.refetchEvents();
-                });
-
-                // Handle Form Submit
-                document.getElementById('activityForm').addEventListener('submit', async (e) => {
-                    e.preventDefault();
+                async function saveData() {
                     const data = {
                         technicianName: techInput.value,
                         date: document.getElementById('date').value,
                         type: document.getElementById('type').value,
                         hours: document.getElementById('hours').value,
-                        reference: document.getElementById('reference').value,
-                        description: document.getElementById('description').value
+                        reference: document.getElementById('ref').value,
+                        description: document.getElementById('desc').value
                     };
-
-                    const response = await fetch('/api/activities', {
+                    localStorage.setItem('technicianName', techInput.value);
+                    const res = await fetch('/api/activities', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(data)
                     });
-
-                    if (response.ok) {
-                        alert("Activity Saved!");
-                        calendar.refetchEvents();
-                    } else {
-                        const err = await response.json();
-                        alert("Error: " + err.error);
-                    }
-                });
+                    if(res.ok) { alert("Saved!"); calendar.refetchEvents(); }
+                }
             </script>
         </body>
         </html>
     `);
 });
-const PORT = process.env.PORT || 5000;
 
+app.get('/', (req, res) => res.redirect('/client'));
+
+// --- START SERVER ---
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log("Server running on port " + PORT);
 });
